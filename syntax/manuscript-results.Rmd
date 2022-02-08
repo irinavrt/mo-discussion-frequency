@@ -1,0 +1,636 @@
+---
+title: "The impact of political discussion frequency on the moral opinions of liberals and conservatives"
+author: "Kimmo Eriksson, Irina Vartanova, Pontus Strimling"
+output:
+  html_document:
+    keep_md: yes
+---
+
+```{r setup, include = FALSE}
+
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE,
+                      fig.width = 6, fig.height = 4, 
+                      out.width = "60%", fig.align = 'center',
+                      dpi = 300, dev="jpeg", tidy = TRUE)
+
+library(tidyverse)
+library(broom)
+library(lme4)
+library(broom.mixed)
+library(modelsummary)
+
+
+theme_set(theme_classic(base_size = 14))
+
+```
+
+
+```{r data, cache.extra = file.info(c("../data/cleaned-anes.rds", "../data/cleaned-gss.rds"))}
+
+# load ANES data
+
+anes_issues <- read_csv("../data/anes_items.csv") 
+
+anes_mf_measures <- read_rds("../data/anes-mf-measures.rds") 
+anes_sample <- read_rds("../data/anes-arguments-sample.rds")
+
+anes_mf_measures <- anes_mf_measures %>% 
+  mutate(hvfl_lib = abs(hvfl))
+
+anes <- read_rds("../data/cleaned-anes.rds") 
+
+anes <-  left_join(anes, 
+                   anes_mf_measures %>% 
+                     select(anes_code, issue, hvfl, hvfl_lib))
+
+anes <- anes %>%
+  # Reverse opinions with negative hvfl so that positions with advantage are always 1.
+  mutate(opinion_lib = ifelse(hvfl < 0, 1 - opinion, opinion), 
+         news = pmax(read_news, watch_news))
+
+
+anes_mod <- anes %>% 
+  drop_na(discuss_lw, polviews, age, gender, race, edu) %>% 
+  mutate(
+    age_sc = scale(age)[,1],
+    year_sc = scale(year_r)[,1],
+    discuss_sc = scale(discuss_lw)[,1],
+    edu_sc = scale(as.numeric(edu))[,1],
+    party_sc = scale(party)[,1], 
+    news_sc = scale(news)[,1]) %>% 
+  ungroup()
+
+
+# load GSS data
+gss_issues <- read_csv("../data/gss-items-98v.csv")
+gss <- read_rds("../data/cleaned-gss.rds") 
+
+gss_mf_measures <- read_rds("../data/gss-mf-measures.rds")
+
+gss_mf_measures <- gss_mf_measures %>% 
+  mutate(hvfl_lib = abs(hvfl))
+
+gss <- left_join(gss, gss_mf_measures)
+
+gss <- gss %>% 
+  # Position with position hvfl is always one
+  mutate(opinion_lib = ifelse(hvfl < 0, 1 - opinion, opinion), 
+         news = as.numeric(fct_rev(news)))
+
+# Put the two discussion variables into long format
+gss <- gss %>% 
+  gather("disc_version", "discuss", 
+         talkpol, talkpol_close, discpol, poldisgn) %>% 
+  drop_na(discuss, opinion, polviews, age, educ)
+
+gss_mod <- gss %>% 
+  group_by(year) %>% 
+  mutate(
+    age_sc = scale(age)[,1],
+    educ_sc = scale(educ)[,1],
+    discuss_sc = scale(discuss)[,1],
+    news_sc = scale(news)[,1]) %>% 
+  ungroup()
+
+
+```
+
+
+## N for abstract
+
+```{r}
+
+gss_mod %>% 
+  summarise(n_issues = n_distinct(issue),
+            n_resp = n_distinct(paste(year, id)))
+
+anes_mod %>% 
+  summarise(n_issues = n_distinct(issue),
+            n_resp = n_distinct(id))
+
+```
+
+
+# Methods
+
+
+```{r polv_distr}
+
+anes_mod %>% 
+  summarise(n_distinct(id))
+
+anes_mod %>% 
+  select(id, polviews) %>% 
+  distinct() %>% 
+  count(polviews) %>% 
+  mutate(prop = n/sum(n))
+
+anes_mod %>% 
+  count(issue) %>% 
+  summarise(sum(n), mean(n), min(n), max(n))
+
+gss_mod %>% 
+  summarise(n_distinct(id))
+
+gss_mod %>% 
+  select(id, polviews) %>% 
+  distinct() %>% 
+  count(polviews) %>% 
+  mutate(prop = n/sum(n))
+
+gss_mod %>% 
+  count(issue) %>% 
+  summarise(sum(n), mean(n), min(n), max(n))
+
+  
+```
+
+
+```{r arg_sample}
+
+
+anes_sample %>%
+  group_by(id) %>% 
+  summarise(mturk_prescreening = unique(mturk_prescreening),
+            age = max(age), 
+            sex = unique(sex)) %>% 
+  summarise(n = n(), 
+            mean(age), 
+            sd(age),
+            mean(sex == "Female"))
+
+anes_sample %>% 
+  count(id) %>% 
+  summarise(mean(n)*9)
+
+anes_mf_measures %>% 
+  summarise(mean(n))
+
+  
+```
+
+
+```{r hvfl_distr}
+
+anes_mf_measures %>% 
+  summarise(min(hvfl), max(hvfl), mean(hvfl), sd(hvfl), min(hvfl_se), max(hvfl_se))
+
+
+```
+
+# Results
+
+```{r fig1}
+
+anes_libcons_opinions <- anes %>% 
+  group_by(issue, polviews) %>% 
+  summarise(mean_opin = weighted.mean(opinion, wgt)) %>% 
+  spread(polviews, mean_opin) %>% 
+  transmute(issue, Opinion = ifelse(Liberal > Conservative, "Liberal", "Conservative"))
+
+anes_libcons_opinions <- left_join(anes_libcons_opinions, 
+                                   anes_mf_measures %>% select(issue, HVFL = hvfl)) 
+
+gss_libcons_opinions <- gss %>% 
+  group_by(issue, polviews) %>% 
+  summarise(mean_opin = weighted.mean(opinion, wgt)) %>% 
+  spread(polviews, mean_opin) %>% 
+  transmute(issue, Opinion = ifelse(Liberal > Conservative, "Liberal", "Conservative"))
+
+gss_libcons_opinions <- left_join(gss_libcons_opinions, 
+                                   select(gss_mf_measures, issue, HVFL = hvfl)) 
+
+
+anes_gss_comb <- bind_rows(anes_libcons_opinions, gss_libcons_opinions) 
+
+anes_gss_comb <- anes_gss_comb %>% 
+  mutate(Opinion_recoded = case_when(
+    HVFL < 0 & Opinion == "Liberal" ~ "Conservative",
+    HVFL < 0 & Opinion == "Conservative" ~ "Liberal", 
+    TRUE ~ Opinion
+  ),
+  HVFL = abs(HVFL))
+
+anes_gss_comb %>% 
+  ggplot(aes(HVFL, fill = Opinion_recoded)) +
+  geom_bar() +
+  scale_x_binned(breaks = c(0, .1, .2, .3, .4, .5),
+                 limits = c(0, .5)) +
+  labs(x = "HVFL argument advantage", y = "Frequency", fill = "Opinion") +
+  scale_fill_grey() +
+  theme_classic()
+
+```
+
+
+
+## DF effect estimated separately in each issue
+
+
+```{r anes_by_issue}
+
+anes_mod_sub <- anes_mod %>% 
+  filter(hvfl_lib >= 0.099)
+
+
+disc_effect <- function(data){
+  m <- glm(opinion_lib ~ discuss_sc + age_sc + edu_sc + gender + race + I(factor(year)),
+          data,
+          weights = wgt,
+          family = quasibinomial())
+  coef(m)["discuss_sc"]
+}
+
+anes_by_issue_polv <- anes_mod_sub %>% 
+  filter(polviews != "Moderate") %>% 
+  group_nest(issue, hvfl_lib, polviews)
+
+anes_polv_coef <- anes_by_issue_polv %>% 
+  mutate(coef = map_dbl(data, disc_effect), 
+         n = map_dbl(data, nrow)) %>% 
+  select(-data)
+
+```
+
+
+
+```{r gsS_by_issue}
+
+gss_mod_sub <- gss_mod %>% 
+  filter(hvfl_lib >= 0.099)
+
+disc_effect <- function(data){
+  m <- glm(opinion_lib ~ discuss_sc + age_sc + educ_sc + sex + race,
+          data,
+          weights = wgt,
+          family = quasibinomial())
+  coef(m)["discuss_sc"]
+}
+
+gss_by_issue_polv <- gss_mod_sub %>% 
+  filter(polviews != "Moderate") %>% 
+  mutate(year = factor(year)) %>% 
+  group_nest(year, issue, hvfl_lib, polviews)
+
+gss_polv_coef <- gss_by_issue_polv %>% 
+  mutate(coef = map_dbl(data, disc_effect), 
+         n = map_dbl(data, nrow)) %>% 
+  select(-data)
+
+
+```
+
+
+
+```{r fig2}
+
+polv_coef <- bind_rows(anes_polv_coef %>% 
+                         mutate(source = "ANES"), 
+                       gss_polv_coef %>% 
+                         mutate(source = str_c("GSS ", year)))
+
+polv_coef %>% 
+  mutate(polviews = fct_rev(polviews)) %>% 
+  ggplot(aes(x = source, y = coef)) +
+  geom_boxplot() +
+  geom_point(position = position_jitter(width = .05)) +
+  geom_hline(yintercept = 0, color = "grey30") +
+  facet_grid(polviews ~ .) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank()) +
+  labs(x = NULL, y = "DF effect")
+
+# ggsave("df-effect.jpeg", width = 7, height = 6, dpi = 350)
+
+```
+
+## Multilevel models
+
+
+```{r anes_mod, cache=TRUE, dependson = "anes_mod"}
+
+anes_mod_sub <- anes_mod %>% 
+  filter(hvfl_lib >= 0.099) 
+
+anes_mod_sub <- anes_mod_sub %>% 
+  mutate(hvfl_lib_10 = (hvfl_lib - mean(hvfl_lib))*10)
+
+
+anes_lib_m0 <- glmer(opinion_lib ~ age_sc + edu_sc + gender + race + 
+                   (1|issue) +
+                   (1|issue:year) +
+                   (1|id),
+                 weights = wgt,
+                 data = anes_mod_sub %>%
+                   filter(polviews == "Liberal"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+anes_lib_m1 <- glmer(opinion_lib ~ discuss_sc +
+                   age_sc + edu_sc + gender + race + 
+                   (1 + discuss_sc|issue) + 
+                   (1|issue:year) +
+                   (1|id),
+                 weights = wgt,
+                 data = anes_mod_sub %>%
+                   filter(polviews == "Liberal"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+anes_lib_m2 <- glmer(opinion_lib ~ discuss_sc*hvfl_lib_10 +
+                   age_sc + edu_sc + gender + race + 
+                   (1 + discuss_sc|issue) + 
+                   (1|issue:year) +
+                   (1|id),
+                 weights = wgt,
+                 data = anes_mod_sub %>%
+                   filter(polviews == "Liberal"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+anes_lib_news_m0 <- glmer(opinion_lib ~ age_sc + edu_sc + gender + race + news_sc +
+                   (1|issue) +
+                   (1|issue:year) +
+                   (1|id),
+                 weights = wgt,
+                 data = anes_mod_sub %>%
+                   filter(polviews == "Liberal"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+anes_lib_news_m1 <- glmer(opinion_lib ~ discuss_sc +
+                   age_sc + edu_sc + gender + race + news_sc +
+                   (1|issue) + 
+                   (1|issue:year) +
+                   (1|id),
+                 weights = wgt,
+                 data = anes_mod_sub %>%
+                   filter(polviews == "Liberal"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+anes_lib_news_m2 <- glmer(opinion_lib ~ discuss_sc*hvfl_lib_10 +
+                   age_sc + edu_sc + gender + race + news_sc +
+                   (1|issue) + 
+                   (1|issue:year) +
+                   (1|id),
+                 weights = wgt,
+                 data = anes_mod_sub %>%
+                   filter(polviews == "Liberal"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+anes_cons_m0 <- glmer(opinion_lib ~ age_sc + edu_sc + gender + race +
+                   (1|issue) +
+                   (1|issue:year) +
+                   (1|id),
+                 weights = wgt,
+                 data = anes_mod_sub %>%
+                   filter(polviews == "Conservative"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+anes_cons_m1 <- glmer(opinion_lib ~ discuss_sc +
+                   age_sc + edu_sc + gender + race +
+                   (1 + discuss_sc|issue) +
+                   (1|issue:year) +
+                   (1|id),
+                 weights = wgt,
+                 data = anes_mod_sub %>%
+                   filter(polviews == "Conservative"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+```
+
+
+
+```{r gss_mod, cache=TRUE, dependson = "gss_mod"}
+
+gss_mod_sub <- gss_mod %>% 
+  filter(hvfl_lib > 0.099)
+
+gss_mod_sub <- gss_mod_sub %>% 
+  mutate(hvfl_lib_10 = (hvfl_lib - mean(hvfl_lib))*10)
+
+
+gss_lib_m0 <- glmer(opinion_lib ~ age_sc + educ_sc + sex + race + 
+                   (1|issue:year) +
+                   (1|issue) +
+                   (1|id),
+                 weights = wgt,
+                 data = gss_mod_sub %>% filter(polviews == "Liberal"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+gss_lib_m1 <- glmer(opinion_lib ~ discuss_sc + age_sc + educ_sc + sex + race + 
+                   (1|issue:year) +
+                   (1 + discuss_sc|issue) + 
+                   (1|id),
+                 weights = wgt,
+                 data = gss_mod_sub %>% filter(polviews == "Liberal"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+
+gss_lib_m2 <- glmer(opinion_lib ~ discuss_sc*hvfl_lib_10 + age_sc + educ_sc + 
+                      sex + race + 
+                   (1|issue:year) +
+                   (1 + discuss_sc|issue) + 
+                   (1|id),
+                 weights = wgt,
+                 data = gss_mod_sub %>% filter(polviews == "Liberal"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+gss_lib_news_m0 <- glmer(opinion_lib ~ age_sc + educ_sc + sex + race + news_sc +
+                   (1|issue:year) +
+                   (1|issue) +
+                   (1|id),
+                 weights = wgt,
+                 data = gss_mod_sub %>% filter(polviews == "Liberal"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+gss_lib_news_m1 <- glmer(opinion_lib ~ discuss_sc + age_sc + educ_sc + sex + race + news_sc +
+                   (1|issue:year) +
+                   (1 + discuss_sc|issue) +
+                   (1|id),
+                 weights = wgt,
+                 data = gss_mod_sub %>% filter(polviews == "Liberal"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+
+gss_lib_news_m2 <- glmer(opinion_lib ~ discuss_sc*hvfl_lib_10 + age_sc + educ_sc + 
+                      sex + race + news_sc +
+                   (1|issue:year) +
+                   (1 + discuss_sc|issue) +
+                   (1|id),
+                 weights = wgt,
+                 data = gss_mod_sub %>% filter(polviews == "Liberal"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+gss_cons_m0 <- glmer(opinion_lib ~ age_sc + educ_sc + sex + race +
+                   (1|issue:year) +
+                   (1|issue) +
+                   (1|id),
+                 weights = wgt,
+                 data = gss_mod_sub %>% filter(polviews == "Conservative"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+gss_cons_m1 <- glmer(opinion_lib ~ discuss_sc + age_sc + educ_sc + sex + race +
+                   (1|issue:year) +
+                   (1 + discuss_sc|issue) +
+                   (1|id),
+                 weights = wgt,
+                 data = gss_mod_sub %>% filter(polviews == "Conservative"),
+                 family = binomial(),
+                 control = glmerControl(
+                   optimizer = "bobyqa"
+                 ))
+
+```
+
+
+### Supplementary Table S1. Items for moral opinions in the ANES, with their HVFL argument advantage.
+
+```{r}
+
+anes_issues %>% 
+  mutate(wording = str_replace(wording, "\n", " ")) %>% 
+  left_join(anes_mf_measures) %>% 
+  select(wording, hvfl) %>% 
+  arrange(desc(abs(hvfl))) %>% 
+  knitr::kable(col.names = c("ANES item", "HVFL"), digits = 2)
+
+```
+
+### Supplementary Table S2. Items for moral opinions in the GSS, with their HVFL argument advantage.
+
+```{r}
+
+gss_issues %>% 
+  filter(issue %in% gss_mod$issue) %>% 
+  left_join(gss_mf_measures) %>% 
+  select(question, hvfl) %>% 
+  arrange(desc(abs(hvfl))) %>% 
+  kableExtra::kbl(col.names = c("GSS item", "HVFL"), digits = 2) %>% 
+  kableExtra::kable_classic()
+
+```
+
+### Supplementary table S4.
+
+```{r}
+
+models <- list("M0" = anes_lib_m0, "M1" = anes_lib_m1, "M2" = anes_lib_m2,
+              "M0" = gss_lib_m0, "M1" = gss_lib_m1, "M2" = gss_lib_m2)
+
+n_rows <-  models %>% 
+  map(~tibble(term = c("$N_k$", "$N_j$", "$N_i$", "$Nobs$"),
+              estimate = rev(c(nobs(.x), ngrps(.x))))) %>% 
+  bind_rows(.id = "m") %>% 
+  mutate(source = c(rep("anes", 12), rep("gss", 12)),
+         term = factor(term, levels = unique(term)),
+         estimate = sprintf("%.0f",  estimate)) %>% 
+  spread(m, estimate) %>% 
+  select(-source)
+
+msummary(models, 
+         statistic = NULL,
+         estimate = "{estimate}\n[{conf.low}, {conf.high}]", 
+         fmt = 2,
+         group = group + term ~ model) %>% 
+  kableExtra::kable_classic()  %>% 
+  kableExtra::add_header_above(c(" " = 1, " " = 1, "ANES" = 3, "GSS" = 3))
+
+```
+
+### Supplementary table S4.A
+
+```{r}
+
+models <- list("M0" = anes_lib_news_m0, "M1" = anes_lib_news_m1, "M2" = anes_lib_news_m2,
+              "M0" = gss_lib_news_m0, "M1" = gss_lib_news_m1, "M2" = gss_lib_news_m2)
+
+n_rows <-  models %>% 
+  map(~tibble(term = c("$N_k$", "$N_j$", "$N_i$", "$Nobs$"),
+              estimate = rev(c(nobs(.x), ngrps(.x))))) %>% 
+  bind_rows(.id = "m") %>% 
+  mutate(source = c(rep("anes", 12), rep("gss", 12)),
+         term = factor(term, levels = unique(term)),
+         estimate = sprintf("%.0f",  estimate)) %>% 
+  spread(m, estimate) %>% 
+  select(-source)
+
+msummary(models, 
+         statistic = NULL,
+         estimate = "{estimate}\n[{conf.low}, {conf.high}]", 
+         fmt = 2,
+         group = group + term ~ model) %>% 
+  kableExtra::kable_classic()  %>% 
+  kableExtra::add_header_above(c(" " = 1, " " = 1, "ANES" = 3, "GSS" = 3))
+
+```
+
+### Supplementary table S5.
+
+```{r}
+
+models <- list("M0" = anes_cons_m0, "M1" = anes_cons_m1,
+              "M0" = gss_cons_m0, "M1" = gss_cons_m1)
+
+n_rows <-  models %>% 
+  map(~tibble(term = c("$N_k$", "$N_j$", "$N_i$", "$Nobs$"),
+              estimate = rev(c(nobs(.x), ngrps(.x))))) %>% 
+  bind_rows(.id = "m") %>% 
+  mutate(source = c(rep("anes", 8), rep("gss", 8)),
+         term = factor(term, levels = unique(term)),
+         estimate = sprintf("%.0f",  estimate)) %>% 
+  spread(m, estimate) %>% 
+  select(-source)
+
+msummary(models, 
+         statistic = NULL,
+         estimate = "{estimate}\n[{conf.low}, {conf.high}]", 
+         fmt = 2,
+         group = group + term ~ model) %>% 
+  kableExtra::add_header_above(c(" " = 1, " " = 1, "ANES" = 2, "GSS" = 2))
+
+```
+
+

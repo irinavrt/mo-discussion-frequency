@@ -1,0 +1,9 @@
+*.Rproj
+.Rproj.user
+.Rhistory
+.RData
+.Ruserdata
+anes_timeseries_cdf.sav
+GSS7218_R2.sav
+manuscript-results_cache
+*.html
